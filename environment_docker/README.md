@@ -85,7 +85,7 @@ docker exec gitlab gitlab-ctl reconfigure
 **If GitLab shows 502 errors**, run:
 ```bash
 docker exec gitlab rm -f /var/opt/gitlab/postgresql/data/postmaster.pid
-docker exec gitlab /opt/gitlab/embedded/bin/pg_resetwal -f /var/opt/gitlab/postgresql/data
+docker exec -u gitlab-psql gitlab /opt/gitlab/embedded/bin/pg_resetwal -f /var/opt/gitlab/postgresql/data
 docker exec gitlab gitlab-ctl restart
 ```
 
