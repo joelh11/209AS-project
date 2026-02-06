@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -259,7 +260,7 @@ def test(
                     # subprocess to renew the cookie
                     subprocess.run(
                         [
-                            "python",
+                            sys.executable, # this used to be "python", but it may not work in some environments where python does not point to the correct python version
                             "browser_env/auto_login.py",
                             "--auth_folder",
                             temp_dir,
