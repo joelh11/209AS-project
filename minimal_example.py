@@ -11,13 +11,13 @@ SLEEP = 1.5
 
 # Check if environment variables are set, if not provide helpful error message
 required_env_vars = [
-    "SHOPPING",
-    "SHOPPING_ADMIN",
-    "REDDIT",
-    "GITLAB",
-    "MAP",
-    "WIKIPEDIA",
-    "HOMEPAGE",
+    # "SHOPPING",
+    "SHOPPING_ADMIN"
+    # "REDDIT",
+    # "GITLAB",
+    # "MAP",
+    # "WIKIPEDIA",
+    # "HOMEPAGE",
 ]
 missing_vars = []
 
@@ -83,6 +83,9 @@ from browser_env import (
     create_id_based_action,
     create_stop_action,
 )
+from llms.providers.openai_utils import (
+    generate_from_openai_chat_completion,
+)
 from evaluation_harness.evaluators import evaluator_router
 
 # Init the environment
@@ -95,7 +98,7 @@ env = ScriptBrowserEnv(
 )
 
 # example 156 as an example
-config_file = "config_files/156.json"
+config_file = "config_files/41.json"
 # maintain a trajectory
 trajectory: Trajectory = []
 
@@ -104,56 +107,146 @@ obs, info = env.reset(options={"config_file": config_file})
 actree_obs = obs["text"]
 print(actree_obs)
 
-# You should see some output like this:
-"""
-[4] RootWebArea 'Projects · Dashboard · GitLab' focused: True
-        [12] link 'Skip to content'
-        [28] link 'Dashboard'
-        [2266] button '' hasPopup: menu expanded: False
-        [63] textbox 'Search GitLab' required: False
-        [61] generic 'Use the shortcut key <kbd>/</kbd> to start a search'
-        [79] link 'Create new...'
-        [95] link 'Issues'
-                [97] generic '13 assigned issues'
-        [101] link 'Merge requests'
-                [104] generic '8 merge requests'"""
+# Helper function to parse LLM action response
+def parse_action_from_llm(response: str) -> tuple[str, str]:
+    """
+    Parse LLM action response like:
+      'click [123]' or 'click 123'
+      'type [45] \"hello\"' or 'type 45 \"hello\"'
+      'FOUND: $XXX.XX'
+      'STOP'
+    Handles responses with reasoning text followed by action.
+    Returns: (action_type, element_id_or_arg)
+    """
+    response = response.strip()
+    
+    # Look for action keywords in the response (handles multi-line with reasoning)
+    lines = response.split('\n')
+    action_line = None
+    
+    for line in reversed(lines):  # Search from end to find last action
+        line = line.strip()
+        if line.upper().startswith(('CLICK', 'TYPE', 'FOUND', 'STOP')):
+            action_line = line
+            break
+    
+    if not action_line:
+        action_line = response  # Fallback to full response
+    
+    if action_line.upper() == "STOP":
+        return ("STOP", "")
+    
+    if "FOUND:" in action_line:
+        return ("FOUND", action_line.split("FOUND:")[1].strip())
+    
+    # Handle both 'click [123]' and 'click 123' formats
+    click_match = re.match(r"click\s+\[?(\d+)\]?", action_line, re.IGNORECASE)
+    if click_match:
+        return ("click", click_match.group(1))
+    
+    # Handle both 'type [45] "text"' and 'type 45 "text"' formats
+    type_match = re.match(r"type\s+\[?(\d+)\]?\s+['\"](.+?)['\"]", action_line, re.IGNORECASE)
+    if type_match:
+        return ("type", f"{type_match.group(1)} {type_match.group(2)}")
+    
+    # If unparseable, treat as STOP
+    print(f"Could not parse action from response; treating as STOP")
+    return ("STOP", "")
 
-# save the state info to the trajectory
+
+# Save initial state
 state_info: StateInfo = {"observation": obs, "info": info}
 trajectory.append(state_info)
 
-# Now let's try to perform the action of clicking the "Merge request" link
-# As the element ID is dynamic each time, we use regex to match the element as the demo
-match = re.search(r"\[(\d+)\] link 'Merge requests'", actree_obs).group(1)
-# Create the action click [ELEMENT_ID]
-click_action = create_id_based_action(f"click [{match}]")
-# Add the action to the trajectory
-trajectory.append(click_action)
+# LLM action loop
+MAX_STEPS = 10
+step_count = 0
 
-# Step and get the new observation
-obs, _, terminated, _, info = env.step(click_action)
-# New observation
-actree_obs = obs["text"]
-print(actree_obs)
-time.sleep(SLEEP)
+while step_count < MAX_STEPS:
+    step_count += 1
+    print(f"\n=== Step {step_count} ===")
+    
+    # Get LLM response
+    try:
+        model_name = os.environ.get("OPENAI_MODEL") or "gpt-3.5-turbo"
+        system_prompt = """You are a Magento admin assistant. Your goal is to find the total amount Sarah Miller spent on her last order.
 
-state_info = {"observation": obs, "info": info}
-trajectory.append(state_info)
+Navigate the admin dashboard to locate order information. When you see Sarah Miller's order, click on it to view details. Look for the order total/grand total amount.
 
-# Next click "assign to you"
-match = re.search(r"\[(\d+)\] link 'Assigned to you", actree_obs).group(1)
-click_action = create_id_based_action(f"click [{match}]")
-trajectory.append(click_action)
+Reply ONLY with one of:
+- "click [ID]" to click an element
+- "type [ID] 'text'" to type into a field
+- "FOUND: $XXX.XX" when you find the total amount
+- "STOP" if you cannot find the information after exploring
 
-obs, _, terminated, _, info = env.step(click_action)
-actree_obs = obs["text"]
-print(actree_obs)
-time.sleep(SLEEP)
-state_info = {"observation": obs, "info": info}
-trajectory.append(state_info)
+Make explicit sure you add the brackets and quotes as shown in the formats above, as they are required for parsing. Do not add any extra text or explanation outside of the specified formats.
+"""
+        
+        user_prompt = f"""You are on the Magento Admin dashboard. Here is what you see:
 
-# add a stop action to mark the end of the trajectory
-trajectory.append(create_stop_action(""))
+{actree_obs}
+
+Find Sarah Miller's last order and report her total spent. What is your next action? Reply ONLY with the action."""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        llm_response = generate_from_openai_chat_completion(
+            messages=messages,
+            model=model_name,
+            temperature=0.0,
+            max_tokens=150,
+            top_p=1.0,
+            context_length=4096,
+        )
+        print(f"LLM response: {llm_response.strip()}")
+    except Exception as e:
+        print(f"LLM call failed: {e}")
+        break
+    
+    # Parse action
+    action_type, action_arg = parse_action_from_llm(llm_response)
+    
+    if action_type == "FOUND":
+        print(f"\n✓ SUCCESS: Sarah Miller's last order total: {action_arg}")
+        trajectory.append(create_stop_action(""))
+        break
+    
+    if action_type == "STOP":
+        print("LLM returned STOP; ending trajectory.")
+        trajectory.append(create_stop_action(""))
+        break
+    
+    # Execute action
+    try:
+        if action_type == "click":
+            action = create_id_based_action(f"click [{action_arg}]")
+        elif action_type == "type":
+            elem_id, text = action_arg.split(" ", 1)
+            action = create_id_based_action(f"type [{elem_id}] {text}")
+        else:
+            print(f"Unknown action type: {action_type}")
+            break
+        
+        trajectory.append(action)
+        print(f"Executing: {action}")
+        
+        obs, reward, terminated, truncated, info = env.step(action)
+        actree_obs = obs["text"]
+        print(f"Reward: {reward}, Terminated: {terminated}")
+        
+        state_info = {"observation": obs, "info": info}
+        trajectory.append(state_info)
+        
+        time.sleep(SLEEP)
+        
+        if terminated:
+            print("Environment terminated.")
+            break
+    except Exception as e:
+        print(f"Action execution failed: {e}")
+        break
 
 
 # Demo evaluation

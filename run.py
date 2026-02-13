@@ -229,7 +229,8 @@ def test(
     }
 
     env = ScriptBrowserEnv(
-        headless=not args.render,
+        # headless=not args.render,
+        headless=False,
         slow_mo=args.slow_mo,
         observation_type=args.observation_type,
         current_viewport_only=args.current_viewport_only,
