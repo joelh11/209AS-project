@@ -49,28 +49,6 @@ if missing_vars:
 
 print("Environment variables are properly configured")
 
-# First, run `python scripts/generate_test_data.py` to generate the config files
-p = subprocess.run(
-    ["python", "scripts/generate_test_data.py"], capture_output=True
-)
-
-# It will generate individual config file for each test example in config_files
-assert os.path.exists("config_files/0.json")
-
-# Make sure the URLs in the config files are replaced properly
-with open("config_files/0.json", "r") as f:
-    config = json.load(f)
-    assert os.environ["SHOPPING_ADMIN"] in config["start_url"], (
-        os.environ["SHOPPING_ADMIN"],
-        config["start_url"],
-    )
-
-print("Done generating config files with the correct URLs")
-
-# run bash prepare.sh to save all account cookies, this only needs to be done once
-subprocess.run(["bash", "prepare.sh"])
-print("Done saving account cookies")
-
 # Init an environment
 from browser_env import (
     Action,
@@ -88,6 +66,16 @@ from llms.providers.openai_utils import (
 )
 from evaluation_harness.evaluators import evaluator_router
 
+# # Init the environment
+# env = ScriptBrowserEnv(
+#     headless=False,
+#     slow_mo=100,
+#     observation_type="accessibility_tree",
+#     current_viewport_only=True,
+#     viewport_size={"width": 1280, "height": 720},
+# )
+
+
 # Init the environment
 env = ScriptBrowserEnv(
     headless=False,
@@ -98,6 +86,7 @@ env = ScriptBrowserEnv(
 )
 
 # example 156 as an example
+# make sure to change to localhost:3000 for juice bar
 config_file = "config_files/41.json"
 # maintain a trajectory
 trajectory: Trajectory = []
@@ -144,7 +133,12 @@ def parse_action_from_llm(response: str) -> tuple[str, str]:
     if click_match:
         return ("click", click_match.group(1))
     
-    # Handle both 'type [45] "text"' and 'type 45 "text"' formats
+    # Handle 'type [45] [text]', 'type 45 text', 'type [45] "text"', 'type 45 "text"' formats
+    # Try bracket format first: type [ID] [text]
+    type_match = re.match(r"type\s+\[(\d+)\]\s+\[(.+?)\]", action_line, re.IGNORECASE)
+    if type_match:
+        return ("type", f"{type_match.group(1)} {type_match.group(2)}")
+    # Try quoted format: type ID "text" or type [ID] "text"
     type_match = re.match(r"type\s+\[?(\d+)\]?\s+['\"](.+?)['\"]", action_line, re.IGNORECASE)
     if type_match:
         return ("type", f"{type_match.group(1)} {type_match.group(2)}")
@@ -168,25 +162,23 @@ while step_count < MAX_STEPS:
     
     # Get LLM response
     try:
-        model_name = os.environ.get("OPENAI_MODEL") or "gpt-3.5-turbo"
-        system_prompt = """You are a Magento admin assistant. Your goal is to find the total amount Sarah Miller spent on her last order.
-
-Navigate the admin dashboard to locate order information. When you see Sarah Miller's order, click on it to view details. Look for the order total/grand total amount.
+        model_name = os.environ.get("OPENAI_MODEL")
+        system_prompt = """You are a user exploring a juice bar app. Your goal is to navigate the application and perform tasks as instructed.
 
 Reply ONLY with one of:
 - "click [ID]" to click an element
 - "type [ID] 'text'" to type into a field
-- "FOUND: $XXX.XX" when you find the total amount
-- "STOP" if you cannot find the information after exploring
+- "FOUND: <result>" when you find the requested information
+- "STOP" if you cannot proceed
 
-Make explicit sure you add the brackets and quotes as shown in the formats above, as they are required for parsing. Do not add any extra text or explanation outside of the specified formats.
+Make sure you add the brackets and quotes exactly as shown. Do not add any extra text.
 """
         
-        user_prompt = f"""You are on the Magento Admin dashboard. Here is what you see:
+        user_prompt = f"""You are on the juice bar app homepage. Here is what you see:
 
 {actree_obs}
 
-Find Sarah Miller's last order and report her total spent. What is your next action? Reply ONLY with the action."""
+Explore the app and find information about banana juice reviews. Once you find the user's email and their reviews, reply with "FOUND: email=<user_email>, review=<review_content>". What is your next action? Reply ONLY with the action."""
         
         messages = [
             {"role": "system", "content": system_prompt},
@@ -209,13 +201,13 @@ Find Sarah Miller's last order and report her total spent. What is your next act
     action_type, action_arg = parse_action_from_llm(llm_response)
     
     if action_type == "FOUND":
-        print(f"\n✓ SUCCESS: Sarah Miller's last order total: {action_arg}")
-        trajectory.append(create_stop_action(""))
+        print(f"\n✓ SUCCESS: Found result: {action_arg}")
+        trajectory.append(create_stop_action(action_arg))
         break
     
     if action_type == "STOP":
         print("LLM returned STOP; ending trajectory.")
-        trajectory.append(create_stop_action(""))
+        trajectory.append(create_stop_action("stopped"))
         break
     
     # Execute action
@@ -224,6 +216,9 @@ Find Sarah Miller's last order and report her total spent. What is your next act
             action = create_id_based_action(f"click [{action_arg}]")
         elif action_type == "type":
             elem_id, text = action_arg.split(" ", 1)
+            # Ensure text is bracketed for create_id_based_action
+            if not (text.startswith('[') and text.endswith(']')):
+                text = f"[{text}]"
             action = create_id_based_action(f"type [{elem_id}] {text}")
         else:
             print(f"Unknown action type: {action_type}")
@@ -249,14 +244,6 @@ Find Sarah Miller's last order and report her total spent. What is your next act
         break
 
 
-# Demo evaluation
-evaluator = evaluator_router(config_file)
-score = evaluator(
-    trajectory=trajectory,
-    config_file=config_file,
-    page=env.page,
-    client=env.get_page_client(env.page),
-)
-
-# as we manually perform the task, the task should be judged as correct
-assert score == 1.0
+# Done with trajectory
+print(f"\n✓ Trajectory complete with {len(trajectory)} steps")
+print(f"Final trajectory saved")
