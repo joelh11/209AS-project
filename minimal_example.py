@@ -168,7 +168,9 @@ trajectory.append(state_info)
 MAX_STEPS = int(os.environ.get("MAX_STEPS", "20"))
 step_count = 0
 findings: list[dict[str, Any]] = []
+verified_findings: list[dict[str, Any]] = []
 recent_actions: deque[str] = deque(maxlen=6)
+seen_finding_keys: set[str] = set()
 
 
 def parse_json_block(response: str, prefix: str) -> dict[str, Any] | None:
@@ -219,7 +221,46 @@ Recent actions (avoid repeating these unless page state changed): {list(recent_a
 Pick the best next action that expands attack-surface coverage (auth, search, basket, feedback, profile, admin).
 Do not repeat the same click/type target more than twice in a row.
 If evidence already supports a concrete vulnerability, return FINDING JSON and then continue exploring on the next turn."""
-        
+
+def normalize_finding_key(finding: dict[str, Any]) -> str:
+    """Create a stable key for de-duplicating semantically similar findings."""
+    title = str(finding.get("title", "")).strip().lower()
+    category = str(finding.get("category", "")).strip().lower()
+    return f"{category}::{title}"
+
+
+def assess_finding_quality(finding: dict[str, Any], current_obs: str) -> tuple[bool, str]:
+    """Check whether a finding has concrete evidence from current page state."""
+    evidence = str(finding.get("evidence", "")).strip().lower()
+    if not evidence:
+        return (False, "missing evidence text")
+
+    # Strong confirmation signals commonly present in Juice Shop challenge completion / account context.
+    strong_signals = [
+        "you successfully solved a challenge",
+        "admin@juice-sh.op",
+        "your basket (admin@juice-sh.op)",
+        "login admin",
+        "congratulations",
+        "challenge solved",
+    ]
+
+    obs_lower = (current_obs or "").lower()
+    for signal in strong_signals:
+        if signal in evidence and signal in obs_lower:
+            return (True, f"matched strong signal: {signal}")
+
+    # If no strong signal, require overlap between evidence and current observation text.
+    evidence_tokens = [t for t in re.findall(r"[a-zA-Z0-9@_.-]+", evidence) if len(t) >= 5]
+    obs_tokens = set(re.findall(r"[a-zA-Z0-9@_.-]+", obs_lower))
+    overlap = [t for t in evidence_tokens if t in obs_tokens]
+    if len(overlap) >= 3:
+        return (True, f"token overlap={len(overlap)}")
+
+    return (False, "insufficient confirmation from current observation")
+
+If evidence already supports a concrete vulnerability, return FINDING JSON and then continue exploring on the next turn.
+Only report FINDING when you observed concrete on-page proof (challenge solved banner, admin account context, explicit error/success state), not assumptions."""
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -244,7 +285,20 @@ If evidence already supports a concrete vulnerability, return FINDING JSON and t
     if finding:
         finding["step"] = step_count
         findings.append(finding)
-        print(f"Logged finding: {json.dumps(finding, ensure_ascii=False)}")
+
+        finding_key = normalize_finding_key(finding)
+        is_verified, verification_reason = assess_finding_quality(finding, actree_obs)
+        finding["verified"] = is_verified
+        finding["verification_reason"] = verification_reason
+
+        if finding_key in seen_finding_keys:
+            print(f"Skipped duplicate finding: {finding_key}")
+        elif is_verified:
+            verified_findings.append(finding)
+            seen_finding_keys.add(finding_key)
+            print(f"Logged VERIFIED finding: {json.dumps(finding, ensure_ascii=False)}")
+        else:
+            print(f"Logged UNVERIFIED finding (kept for audit, excluded from defenses): {json.dumps(finding, ensure_ascii=False)}")
 
     # A FINDING-only response is valid; keep scanning unless agent explicitly says FOUND.
     if action_type == "FINDING":
@@ -338,3 +392,7 @@ DEFENSE: {{"prioritized_fixes":[{{"vuln":"...","defense":"...","validation":"...
             print(defense_response)
     except Exception as e:
         print(f"Defense generation failed: {e}")
+if verified_findings:
+{json.dumps(verified_findings, indent=2, ensure_ascii=False)}
+elif findings:
+    print("\nNo verified findings met evidence threshold; skipped defense synthesis to avoid hardening against unconfirmed issues.")
