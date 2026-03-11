@@ -396,3 +396,32 @@ if verified_findings:
 {json.dumps(verified_findings, indent=2, ensure_ascii=False)}
 elif findings:
     print("\nNo verified findings met evidence threshold; skipped defense synthesis to avoid hardening against unconfirmed issues.")
+        defense_prompt = (
+            "You are an application security engineer.\n"
+            "Given these observed findings from Juice Shop, produce robust defenses that generalize and do not depend on hardcoded signatures.\n\n"
+            "Findings JSON:\n"
+            f"{json.dumps(verified_findings, indent=2, ensure_ascii=False)}\n\n"
+            "Return EXACTLY one JSON object prefixed with DEFENSE:\n"
+            "DEFENSE: {\n"
+            "  \"prioritized_fixes\": [\n"
+            "    {\"vuln\": \"...\", \"defense\": \"...\", \"validation\": \"...\"}\n"
+            "  ],\n"
+            "  \"platform_controls\": [\"...\"],\n"
+            "  \"monitoring\": [\"...\"]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- Every object in prioritized_fixes must ONLY contain the keys: vuln, defense, validation.\n"
+            "- No extra keys, no markdown, no prose before/after."
+        )
+            repair_prompt = (
+                "Repair the following into a valid DEFENSE payload. "
+                "Output exactly one line prefixed with DEFENSE: and valid JSON.\n\n"
+                "Original:\n"
+                f"{defense_response}\n\n"
+                "Required schema:\n"
+                "{\n"
+                "  \"prioritized_fixes\": [{\"vuln\": \"...\", \"defense\": \"...\", \"validation\": \"...\"}],\n"
+                "  \"platform_controls\": [\"...\"],\n"
+                "  \"monitoring\": [\"...\"]\n"
+                "}"
+            )
