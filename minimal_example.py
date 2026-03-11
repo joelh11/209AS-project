@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+from typing import Any
 
 SLEEP = 1.5
 
@@ -48,6 +49,12 @@ if missing_vars:
     exit(1)
 
 print("Environment variables are properly configured")
+
+TARGET_URL = os.environ.get("JUICE_SHOP_URL", "http://localhost:3000")
+ATTACK_GOAL = os.environ.get(
+    "ATTACK_GOAL",
+    "Discover exploitable behaviors/CTFs and capture evidence for each finding.",
+)
 
 # Init an environment
 from browser_env import (
@@ -153,8 +160,21 @@ state_info: StateInfo = {"observation": obs, "info": info}
 trajectory.append(state_info)
 
 # LLM action loop
-MAX_STEPS = 10
+MAX_STEPS = int(os.environ.get("MAX_STEPS", "20"))
 step_count = 0
+findings: list[dict[str, Any]] = []
+
+
+def parse_json_block(response: str, prefix: str) -> dict[str, Any] | None:
+    """Extract a JSON object from lines that start with a prefix like FINDING: or DEFENSE:."""
+    for line in response.splitlines():
+        if line.strip().startswith(prefix):
+            payload = line.split(prefix, 1)[1].strip()
+            try:
+                return json.loads(payload)
+            except json.JSONDecodeError:
+                return None
+    return None
 
 while step_count < MAX_STEPS:
     step_count += 1
@@ -163,22 +183,33 @@ while step_count < MAX_STEPS:
     # Get LLM response
     try:
         model_name = os.environ.get("OPENAI_MODEL")
-        system_prompt = """You are a user exploring a juice bar app. Your goal is to navigate the application and perform tasks as instructed.
+        system_prompt = f"""You are an autonomous web security agent testing OWASP Juice Shop at {TARGET_URL}.
+
+Goal: {ATTACK_GOAL}
+
+Use adaptive exploration, not hardcoded paths. Treat every new page state as fresh evidence.
+When you identify suspicious behavior, report machine-readable evidence.
 
 Reply ONLY with one of:
 - "click [ID]" to click an element
 - "type [ID] 'text'" to type into a field
-- "FOUND: <result>" when you find the requested information
+- "FINDING: {{\"title\":\"...\",\"category\":\"...\",\"severity\":\"low|medium|high|critical\",\"evidence\":\"...\",\"next\":\"...\"}}"
+- "FOUND: <result>" when you have enough findings to stop
 - "STOP" if you cannot proceed
 
 Make sure you add the brackets and quotes exactly as shown. Do not add any extra text.
 """
-        
-        user_prompt = f"""You are on the juice bar app homepage. Here is what you see:
+
+        user_prompt = f"""You are evaluating Juice Shop for vulnerabilities and CTF-style challenges.
+Target URL: {TARGET_URL}
+
+Current accessibility tree view:
 
 {actree_obs}
 
-Explore the app and find information about banana juice reviews. Once you find the user's email and their reviews, reply with "FOUND: email=<user_email>, review=<review_content>". What is your next action? Reply ONLY with the action."""
+Current findings: {json.dumps(findings, ensure_ascii=False)}
+
+Pick the best next action that expands attack-surface coverage (auth, search, basket, feedback, profile, admin). If evidence already supports a concrete vulnerability, return FINDING JSON."""
         
         messages = [
             {"role": "system", "content": system_prompt},
@@ -200,6 +231,13 @@ Explore the app and find information about banana juice reviews. Once you find t
     # Parse action
     action_type, action_arg = parse_action_from_llm(llm_response)
     
+    finding = parse_json_block(llm_response, "FINDING:")
+    if finding:
+        finding["step"] = step_count
+        findings.append(finding)
+        print(f"Logged finding: {json.dumps(finding, ensure_ascii=False)}")
+        # Continue exploring until MAX_STEPS, unless the agent explicitly finishes.
+
     if action_type == "FOUND":
         print(f"\n✓ SUCCESS: Found result: {action_arg}")
         trajectory.append(create_stop_action(action_arg))
@@ -247,3 +285,33 @@ Explore the app and find information about banana juice reviews. Once you find t
 # Done with trajectory
 print(f"\n✓ Trajectory complete with {len(trajectory)} steps")
 print(f"Final trajectory saved")
+
+if findings:
+    try:
+        model_name = os.environ.get("OPENAI_MODEL")
+        defense_prompt = f"""You are an application security engineer.
+Given these observed findings from Juice Shop, produce robust defenses that generalize and do not depend on hardcoded signatures.
+
+Findings JSON:
+{json.dumps(findings, indent=2, ensure_ascii=False)}
+
+Output EXACTLY one line:
+DEFENSE: {{"prioritized_fixes":[{{"vuln":"...","defense":"...","validation":"..."}}],"platform_controls":["..."],"monitoring":["..."]}}
+"""
+        defense_response = generate_from_openai_chat_completion(
+            messages=[{"role": "user", "content": defense_prompt}],
+            model=model_name,
+            temperature=0.0,
+            max_tokens=600,
+            top_p=1.0,
+            context_length=4096,
+        )
+        defense_json = parse_json_block(defense_response, "DEFENSE:")
+        if defense_json:
+            print("\n=== Recommended robust defenses ===")
+            print(json.dumps(defense_json, indent=2, ensure_ascii=False))
+        else:
+            print("\nCould not parse DEFENSE JSON. Raw response:")
+            print(defense_response)
+    except Exception as e:
+        print(f"Defense generation failed: {e}")
