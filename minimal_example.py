@@ -12,50 +12,34 @@ from typing import Any
 SLEEP = 1.5
 
 # Check if environment variables are set, if not provide helpful error message
-required_env_vars = [
-    # "SHOPPING",
-    "SHOPPING_ADMIN"
-    # "REDDIT",
-    # "GITLAB",
-    # "MAP",
-    # "WIKIPEDIA",
-    # "HOMEPAGE",
-]
-missing_vars = []
+required_env_vars = ["SHOPPING_ADMIN"]
+missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
+strict_env_check = os.environ.get("STRICT_ENV_CHECK", "0") == "1"
 
-for var in required_env_vars:
-    if not os.environ.get(var):
-        missing_vars.append(var)
-
-if missing_vars:
-    print(
-        f"ERROR: Missing required environment variables: {', '.join(missing_vars)}"
-    )
-    print("\nPlease set the following environment variables before running:")
-    print("export SHOPPING='http://YOUR_WEBARENA_SERVER:7770'")
-    print("export SHOPPING_ADMIN='http://YOUR_WEBARENA_SERVER:7780/admin'")
-    print("export REDDIT='http://YOUR_WEBARENA_SERVER:9999'")
-    print("export GITLAB='http://YOUR_WEBARENA_SERVER:8023'")
-    print("export MAP='http://YOUR_WEBARENA_SERVER:3000'")
-    print(
-        "export WIKIPEDIA='http://YOUR_WEBARENA_SERVER:8888/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing'"
-    )
-    print("export HOMEPAGE='PASS'")
-    print(
-        "\nReplace YOUR_WEBARENA_SERVER with your WebArena server's IP address."
-    )
-    print(
-        "Note: 18.208.187.221 is the map backend server, not the WebArena frontend server."
-    )
+if missing_vars and strict_env_check:
+    print(f"ERROR: Missing required environment variables: {', '.join(missing_vars)}")
     exit(1)
+elif missing_vars:
+    print(
+        f"Warning: Missing environment variables ({', '.join(missing_vars)}). "
+        "Continuing because STRICT_ENV_CHECK=0."
+    )
+else:
+    print("Environment variables are properly configured")
 
-print("Environment variables are properly configured")
+if sys.version_info < (3, 10):
+    raise RuntimeError(
+        f"minimal_example.py requires Python 3.10+ (detected {sys.version.split()[0]})."
+    )
+print(f"Running with Python {sys.version.split()[0]}")
 
 TARGET_URL = os.environ.get("JUICE_SHOP_URL", "http://localhost:3000")
 ATTACK_GOAL = os.environ.get(
     "ATTACK_GOAL",
     "Discover exploitable behaviors/CTFs and capture evidence for each finding.",
 )
+print(f"Target URL: {TARGET_URL}")
+print(f"Config file: {os.environ.get('WEBARENA_CONFIG', 'config_files/41.json')}")
 
 # Init an environment
 from browser_env import (
@@ -95,7 +79,7 @@ env = ScriptBrowserEnv(
 
 # example 156 as an example
 # make sure to change to localhost:3000 for juice bar
-config_file = "config_files/41.json"
+config_file = os.environ.get("WEBARENA_CONFIG", "config_files/41.json")
 # maintain a trajectory
 trajectory: Trajectory = []
 
@@ -265,37 +249,32 @@ Only report FINDING when you observed concrete on-page proof (challenge solved b
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        llm_response = generate_from_openai_chat_completion(
-            messages=messages,
-            model=model_name,
-            temperature=0.0,
-            max_tokens=150,
-            top_p=1.0,
-            context_length=4096,
+        model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        system_prompt = (
+            f"You are an autonomous web security agent testing OWASP Juice Shop at {TARGET_URL}.\n\n"
+            f"Goal: {ATTACK_GOAL}\n\n"
+            "Use adaptive exploration, not hardcoded paths. Treat every new page state as fresh evidence.\n"
+            "When you identify suspicious behavior, report machine-readable evidence.\n\n"
+            "Reply ONLY with one of:\n"
+            "- \"click [ID]\" to click an element\n"
+            "- \"type [ID] 'text'\" to type into a field\n"
+            "- \"FINDING: {\\\"title\\\":\\\"...\\\",\\\"category\\\":\\\"...\\\",\\\"severity\\\":\\\"low|medium|high|critical\\\",\\\"evidence\\\":\\\"...\\\",\\\"next\\\":\\\"...\\\"}\"\n"
+            "- \"FOUND: <result>\" when you have enough findings to stop\n"
+            "- \"STOP\" if you cannot proceed\n\n"
+            "Make sure you add the brackets and quotes exactly as shown. Do not add any extra text."
         )
-        print(f"LLM response: {llm_response.strip()}")
-    except Exception as e:
-        print(f"LLM call failed: {e}")
-        break
-    
-    # Parse action
-    action_type, action_arg = parse_action_from_llm(llm_response)
-    
-    finding = parse_json_block(llm_response, "FINDING:")
-    if finding:
-        finding["step"] = step_count
-        findings.append(finding)
-
-        finding_key = normalize_finding_key(finding)
-        is_verified, verification_reason = assess_finding_quality(finding, actree_obs)
-        finding["verified"] = is_verified
-        finding["verification_reason"] = verification_reason
-
-        if finding_key in seen_finding_keys:
-            print(f"Skipped duplicate finding: {finding_key}")
-        elif is_verified:
-            verified_findings.append(finding)
-            seen_finding_keys.add(finding_key)
+        user_prompt = (
+            "You are evaluating Juice Shop for vulnerabilities and CTF-style challenges.\n"
+            f"Target URL: {TARGET_URL}\n\n"
+            "Current accessibility tree view:\n\n"
+            f"{actree_obs}\n\n"
+            f"Current findings: {json.dumps(findings, ensure_ascii=False)}\n"
+            f"Recent actions (avoid repeating these unless page state changed): {list(recent_actions)}\n\n"
+            "Pick the best next action that expands attack-surface coverage (auth, search, basket, feedback, profile, admin).\n"
+            "Do not repeat the same click/type target more than twice in a row.\n"
+            "If evidence already supports a concrete vulnerability, return FINDING JSON and then continue exploring on the next turn.\n"
+            "Only report FINDING when you observed concrete on-page proof (challenge solved banner, admin account context, explicit error/success state), not assumptions."
+        )
             print(f"Logged VERIFIED finding: {json.dumps(finding, ensure_ascii=False)}")
         else:
             print(f"Logged UNVERIFIED finding (kept for audit, excluded from defenses): {json.dumps(finding, ensure_ascii=False)}")
@@ -396,3 +375,32 @@ if verified_findings:
 {json.dumps(verified_findings, indent=2, ensure_ascii=False)}
 elif findings:
     print("\nNo verified findings met evidence threshold; skipped defense synthesis to avoid hardening against unconfirmed issues.")
+        defense_prompt = (
+            "You are an application security engineer.\n"
+            "Given these observed findings from Juice Shop, produce robust defenses that generalize and do not depend on hardcoded signatures.\n\n"
+            "Findings JSON:\n"
+            f"{json.dumps(verified_findings, indent=2, ensure_ascii=False)}\n\n"
+            "Return EXACTLY one JSON object prefixed with DEFENSE:\n"
+        model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+            "  \"prioritized_fixes\": [\n"
+            "    {\"vuln\": \"...\", \"defense\": \"...\", \"validation\": \"...\"}\n"
+            "  ],\n"
+            "  \"platform_controls\": [\"...\"],\n"
+            "  \"monitoring\": [\"...\"]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- Every object in prioritized_fixes must ONLY contain the keys: vuln, defense, validation.\n"
+            "- No extra keys, no markdown, no prose before/after."
+        )
+            repair_prompt = (
+                "Repair the following into a valid DEFENSE payload. "
+                "Output exactly one line prefixed with DEFENSE: and valid JSON.\n\n"
+                "Original:\n"
+                f"{defense_response}\n\n"
+                "Required schema:\n"
+                "{\n"
+                "  \"prioritized_fixes\": [{\"vuln\": \"...\", \"defense\": \"...\", \"validation\": \"...\"}],\n"
+                "  \"platform_controls\": [\"...\"],\n"
+                "  \"monitoring\": [\"...\"]\n"
+                "}"
+            )
