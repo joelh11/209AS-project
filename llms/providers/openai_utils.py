@@ -114,6 +114,8 @@ async def agenerate_from_openai_completion(
         )
     openai.api_key = os.environ["OPENAI_API_KEY"]
     openai.organization = os.environ.get("OPENAI_ORGANIZATION", "")
+    if "OPENAI_API_BASE" in os.environ:
+        openai.api_base = os.environ["OPENAI_API_BASE"]
 
     limiter = aiolimiter.AsyncLimiter(requests_per_minute)
     async_responses = [
@@ -147,6 +149,8 @@ def generate_from_openai_completion(
         )
     openai.api_key = os.environ["OPENAI_API_KEY"]
     openai.organization = os.environ.get("OPENAI_ORGANIZATION", "")
+    if "OPENAI_API_BASE" in os.environ:
+        openai.api_base = os.environ["OPENAI_API_BASE"]
     response = openai.Completion.create(  # type: ignore
         prompt=prompt,
         engine=engine,
@@ -219,6 +223,8 @@ async def agenerate_from_openai_chat_completion(
         )
     openai.api_key = os.environ["OPENAI_API_KEY"]
     openai.organization = os.environ.get("OPENAI_ORGANIZATION", "")
+    if "OPENAI_API_BASE" in os.environ:
+        openai.api_base = os.environ["OPENAI_API_BASE"]
 
     limiter = aiolimiter.AsyncLimiter(requests_per_minute)
     async_responses = [
@@ -252,6 +258,8 @@ def generate_from_openai_chat_completion(
         )
     openai.api_key = os.environ["OPENAI_API_KEY"]
     openai.organization = os.environ.get("OPENAI_ORGANIZATION", "")
+    if "OPENAI_API_BASE" in os.environ:
+        openai.api_base = os.environ["OPENAI_API_BASE"]
 
     response = openai.ChatCompletion.create(  # type: ignore
         model=model,
@@ -282,5 +290,7 @@ def fake_generate_from_openai_chat_completion(
         )
     openai.api_key = os.environ["OPENAI_API_KEY"]
     openai.organization = os.environ.get("OPENAI_ORGANIZATION", "")
+    if "OPENAI_API_BASE" in os.environ:
+        openai.api_base = os.environ["OPENAI_API_BASE"]
     answer = "Let's think step-by-step. This page shows a list of links and buttons. There is a search box with the label 'Search query'. I will click on the search box to type the query. So the action I will perform is \"click [60]\"."
     return answer

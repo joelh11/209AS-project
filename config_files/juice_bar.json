@@ -1,0 +1,5 @@
+{
+  "start_url": "http://localhost:3000",
+  "task_id": "juice_bar",
+  "intent": "Find information about banana juice reviews"
+}

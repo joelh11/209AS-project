@@ -9,45 +9,6 @@ import time
 
 SLEEP = 1.5
 
-# Check if environment variables are set, if not provide helpful error message
-required_env_vars = [
-    # "SHOPPING",
-    "SHOPPING_ADMIN"
-    # "REDDIT",
-    # "GITLAB",
-    # "MAP",
-    # "WIKIPEDIA",
-    # "HOMEPAGE",
-]
-missing_vars = []
-
-for var in required_env_vars:
-    if not os.environ.get(var):
-        missing_vars.append(var)
-
-if missing_vars:
-    print(
-        f"ERROR: Missing required environment variables: {', '.join(missing_vars)}"
-    )
-    print("\nPlease set the following environment variables before running:")
-    print("export SHOPPING='http://YOUR_WEBARENA_SERVER:7770'")
-    print("export SHOPPING_ADMIN='http://YOUR_WEBARENA_SERVER:7780/admin'")
-    print("export REDDIT='http://YOUR_WEBARENA_SERVER:9999'")
-    print("export GITLAB='http://YOUR_WEBARENA_SERVER:8023'")
-    print("export MAP='http://YOUR_WEBARENA_SERVER:3000'")
-    print(
-        "export WIKIPEDIA='http://YOUR_WEBARENA_SERVER:8888/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing'"
-    )
-    print("export HOMEPAGE='PASS'")
-    print(
-        "\nReplace YOUR_WEBARENA_SERVER with your WebArena server's IP address."
-    )
-    print(
-        "Note: 18.208.187.221 is the map backend server, not the WebArena frontend server."
-    )
-    exit(1)
-
-print("Environment variables are properly configured")
 
 # Init an environment
 from browser_env import (
@@ -64,7 +25,6 @@ from browser_env import (
 from llms.providers.openai_utils import (
     generate_from_openai_chat_completion,
 )
-from evaluation_harness.evaluators import evaluator_router
 
 # # Init the environment
 # env = ScriptBrowserEnv(
@@ -85,14 +45,11 @@ env = ScriptBrowserEnv(
     viewport_size={"width": 1280, "height": 720},
 )
 
-# example 156 as an example
-# make sure to change to localhost:3000 for juice bar
-config_file = "config_files/41.json"
-# maintain a trajectory
+# Juice bar task on localhost:3000
 trajectory: Trajectory = []
 
-# set the environment for the current example
-obs, info = env.reset(options={"config_file": config_file})
+# Set up the environment with juice bar config
+obs, info = env.reset(options={"config_file": "config_files/juice_bar.json"})
 actree_obs = obs["text"]
 print(actree_obs)
 
