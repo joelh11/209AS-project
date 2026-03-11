@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import subprocess
 import time
 from collections import deque
@@ -51,6 +52,12 @@ if missing_vars:
     exit(1)
 
 print("Environment variables are properly configured")
+
+if sys.version_info < (3, 10):
+    raise RuntimeError(
+        f"minimal_example.py requires Python 3.10+ (detected {sys.version.split()[0]})."
+    )
+print(f"Running with Python {sys.version.split()[0]}")
 
 TARGET_URL = os.environ.get("JUICE_SHOP_URL", "http://localhost:3000")
 ATTACK_GOAL = os.environ.get(
