@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+from collections import deque
 from typing import Any
 
 SLEEP = 1.5
@@ -109,6 +110,7 @@ def parse_action_from_llm(response: str) -> tuple[str, str]:
     Parse LLM action response like:
       'click [123]' or 'click 123'
       'type [45] \"hello\"' or 'type 45 \"hello\"'
+      'FINDING: {json}'
       'FOUND: $XXX.XX'
       'STOP'
     Handles responses with reasoning text followed by action.
@@ -131,7 +133,10 @@ def parse_action_from_llm(response: str) -> tuple[str, str]:
     
     if action_line.upper() == "STOP":
         return ("STOP", "")
-    
+
+    if "FINDING:" in action_line.upper():
+        return ("FINDING", action_line)
+
     if "FOUND:" in action_line:
         return ("FOUND", action_line.split("FOUND:")[1].strip())
     
@@ -163,6 +168,7 @@ trajectory.append(state_info)
 MAX_STEPS = int(os.environ.get("MAX_STEPS", "20"))
 step_count = 0
 findings: list[dict[str, Any]] = []
+recent_actions: deque[str] = deque(maxlen=6)
 
 
 def parse_json_block(response: str, prefix: str) -> dict[str, Any] | None:
@@ -208,8 +214,11 @@ Current accessibility tree view:
 {actree_obs}
 
 Current findings: {json.dumps(findings, ensure_ascii=False)}
+Recent actions (avoid repeating these unless page state changed): {list(recent_actions)}
 
-Pick the best next action that expands attack-surface coverage (auth, search, basket, feedback, profile, admin). If evidence already supports a concrete vulnerability, return FINDING JSON."""
+Pick the best next action that expands attack-surface coverage (auth, search, basket, feedback, profile, admin).
+Do not repeat the same click/type target more than twice in a row.
+If evidence already supports a concrete vulnerability, return FINDING JSON and then continue exploring on the next turn."""
         
         messages = [
             {"role": "system", "content": system_prompt},
@@ -236,7 +245,14 @@ Pick the best next action that expands attack-surface coverage (auth, search, ba
         finding["step"] = step_count
         findings.append(finding)
         print(f"Logged finding: {json.dumps(finding, ensure_ascii=False)}")
-        # Continue exploring until MAX_STEPS, unless the agent explicitly finishes.
+
+    # A FINDING-only response is valid; keep scanning unless agent explicitly says FOUND.
+    if action_type == "FINDING":
+        continue
+
+    if finding and action_type == "STOP":
+        print("FINDING detected; ignoring STOP fallback and continuing exploration.")
+        continue
 
     if action_type == "FOUND":
         print(f"\n✓ SUCCESS: Found result: {action_arg}")
@@ -248,6 +264,12 @@ Pick the best next action that expands attack-surface coverage (auth, search, ba
         trajectory.append(create_stop_action("stopped"))
         break
     
+    # Prevent simple action loops
+    if len(recent_actions) >= 3 and len(set(list(recent_actions)[-3:])) == 1:
+        print("Detected repeated action loop; forcing STOP to avoid non-productive execution.")
+        trajectory.append(create_stop_action("loop_detected"))
+        break
+
     # Execute action
     try:
         if action_type == "click":
@@ -263,6 +285,7 @@ Pick the best next action that expands attack-surface coverage (auth, search, ba
             break
         
         trajectory.append(action)
+        recent_actions.append(f"{action_type}:{action_arg}")
         print(f"Executing: {action}")
         
         obs, reward, terminated, truncated, info = env.step(action)
