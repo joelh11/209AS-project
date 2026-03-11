@@ -6,7 +6,6 @@ import json
 import os
 import re
 import sys
-import subprocess
 import time
 from collections import deque
 from typing import Any
